@@ -1,0 +1,51 @@
+# Environment
+CLAUDE.md
+.env
+.env.local
+.env.*.local
+
+# Python
+venv/
+.venv/
+__pycache__/
+build/
+pip-log.txt
+.pytest_cache/
+.coverage/
+*.eff-info/
+dist/
+pip-delete-this-directory.txt
+
+# Models
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# Data
+data/embeddings/
+*.db
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+docker-compose.override.yml
+
+# Local testing
+temp_audio/
+
