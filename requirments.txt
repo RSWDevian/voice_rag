@@ -1,5 +1,5 @@
 # Web Framework
-fastapi==0.104.1
+fastapi==0.115.6
 uvicorn[standard]==0.24.0
 websockets==12.0
 python-multipart==0.0.6
@@ -9,16 +9,15 @@ python-dotenv==1.0.0
 httpx==0.25.1
 
 # ML/AI (Local)
-torch==2.1.0
-torchaudio==2.1.0
-transformers==4.35.0
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
+torch==2.4.1
+torchaudio==2.4.1
+transformers==4.44.2
+sentence-transformers==3.0.1
+faiss-cpu==1.8.0.post1
 
 # Utils
-numpy==1.24.3
-pydantic==2.4.2
-asyncio==3.4.3
+numpy==1.26.4
+pydantic==2.8.2
 
 # Optional - Caching
 redis==5.0.1
@@ -32,5 +31,5 @@ pytest-asyncio==0.21.0
 locust==2.17.0
 
 # Audio
-scipy==1.11.4
+scipy==1.12.0
 soundfile==0.12.1
