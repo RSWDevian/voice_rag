@@ -24,24 +24,25 @@ class OpenRouterSTT:
         self.base_url = config.OPENROUTER_BASE_URL
         self.model = config.STT_MODEL
         self.timeout = config.OPENROUTER_TIMEOUT
+        self.sample_rate = getattr(config, 'VAD_SAMPLE_RATE', 16000)
         self.connections = config.MAX_CONCURRENT_USERS
+        self._closed = False
 
         # Performance tracking
-        self.total_transcription = 0.0
+        self.total_transcriptions = 0
         self.total_latency_ms = 0.0
 
-        if not self.api_key or not self.api_url:
+        if not self.api_key or not self.base_url:
             logger.error("OpenRouter API key or URL is not configured")
             raise ValueError("OpenRouter API key or URL is missing")
 
-        logger.info(f"STT initialized: model={self.model}, sample_rate={self.sample_rate}, timeout={self.timeout}s")
-
+        # Create HTTP client
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
         )
 
-        logger.info(f"STT initialized: model={self.model}")
+        logger.info(f"STT initialized: model={self.model}, sample_rate={self.sample_rate}, timeout={self.timeout}s")
     
     async def transcribe(self, audio_bytes: bytes, language: str = "en") -> Optional[str]:
         """
@@ -63,43 +64,58 @@ class OpenRouterSTT:
             
             # Encode audio as base64
             audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-            
-            # Prepare request
+
+            # OpenRouter has no dedicated /audio/transcriptions endpoint - audio
+            # goes in as an input_audio content block on a normal chat completion,
+            # routed to a multimodal model that accepts audio input.
             payload = {
                 "model": self.model,
-                "audio": audio_base64,
-                "response_format": "text",
-                "language": language,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Transcribe this audio exactly as spoken, in {language}. "
+                                        f"Reply with only the transcription, no commentary."
+                            },
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": audio_base64,
+                                    "format": "pcm16"
+                                }
+                            }
+                        ]
+                    }
+                ]
             }
-            
-            # Add model-specific optimizations
-            if "whisper" in self.model:
-                payload["temperature"] = 0.0  # Deterministic for speed
-            
+
             # Make API request
             response = await self.client.post(
-                f"{self.base_url}/audio/transcriptions",
+                f"{self.base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload
             )
-            
+
             # Track latency
             latency_ms = (time.time() - start_time) * 1000
             self.total_transcriptions += 1
             self.total_latency_ms += latency_ms
-            
+
             # Log performance occasionally
             if self.total_transcriptions % 10 == 0:
                 avg_latency = self.total_latency_ms / self.total_transcriptions
                 logger.debug(f"STT stats: avg_latency={avg_latency:.2f}ms, "
                            f"transcriptions={self.total_transcriptions}")
-            
+
             # Parse response
             if response.status_code == 200:
-                transcript = response.text.strip()
+                data = response.json()
+                transcript = data["choices"][0]["message"]["content"].strip()
                 logger.debug(f"STT: '{transcript[:50]}...' ({latency_ms:.0f}ms)")
                 return transcript
             else:
@@ -185,14 +201,20 @@ class OpenRouterSTT:
     
     async def close(self):
         """Close HTTP client"""
-        await self.client.aclose()
+        if not self._closed:
+            await self.client.aclose()
+            self._closed = True
     
     def __del__(self):
         """Cleanup on deletion"""
-        if hasattr(self, 'client'):
+        if hasattr(self, 'client') and not self._closed:
             try:
-                asyncio.create_task(self.client.aclose())
-            except:
+                import asyncio
+                if asyncio.get_event_loop().is_running():
+                    asyncio.create_task(self.client.aclose())
+                else:
+                    asyncio.run(self.client.aclose())
+            except Exception:
                 pass
 
 
@@ -291,9 +313,8 @@ if __name__ == "__main__":
         """Test STT with sample audio"""
         stt = StreamingSTT()
         
-        # Test with generated audio (simulated)
-        # In practice, you'd use real audio data
-        sample_audio = np.zeros(16000 * 2, dtype=np.int16).tobytes()
+        # Generate test audio (1 second of silence)
+        sample_audio = np.zeros(16000, dtype=np.int16).tobytes()
         
         # Test transcribe
         transcript = await stt.process_audio([sample_audio])

@@ -229,19 +229,22 @@ class StreamingRAGPipeline:
                     first_token = False
                 
                 response_text += llm_chunk
-                
-                # 6. TTS Streaming
-                async for audio_chunk in self._stream_tts(llm_chunk):
-                    yield audio_chunk
-            
+
+                # 6. TTS Streaming (skippable via TTS_ENABLED while TTS is unavailable/being fixed)
+                if config.TTS_ENABLED:
+                    async for audio_chunk in self._stream_tts(llm_chunk):
+                        yield audio_chunk
+
             # 7. Update context
             if response_text:
                 self.query_builder.update_context(query, response_text)
-                
+
                 # 8. Track complete pipeline latency
                 total_latency = (time.time() - self.pipeline_start_time) * 1000
                 self.metrics.record_latency("total_pipeline", total_latency)
                 logger.info(f"Pipeline complete: {total_latency:.0f}ms")
+                if not config.TTS_ENABLED:
+                    logger.info(f"LLM response (TTS disabled): {response_text}")
             
         except Exception as e:
             logger.error(f"Transcript processing error: {e}")

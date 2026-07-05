@@ -1,14 +1,13 @@
-# src/tts.py
 """
-Text-to-Speech using OpenRouter Unified API
-Supports streaming synthesis with low latency
+Text-to-Speech using ElevenLabs API
+Direct integration with streaming support
+Supports English voices
 """
 
-import base64
 import time
 import asyncio
-from typing import AsyncGenerator, Optional, List, Dict, Any, Union
-from io import BytesIO
+from typing import AsyncGenerator, Optional, List, Dict, Any
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -19,18 +18,18 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class OpenRouterTTS:
+class ElevenLabsTTS:
     """
-    OpenRouter TTS client with streaming support
-    Optimized for low latency with multiple format options
+    ElevenLabs TTS client with streaming support
+    Optimized for low latency with PCM format
+    Uses English voices
     """
     
     def __init__(self):
-        """Initialize OpenRouter TTS client"""
-        self.api_key = config.OPENROUTER_API_KEY
-        self.base_url = config.OPENROUTER_BASE_URL
-        self.model = config.TTS_MODEL
-        self.voice = config.TTS_VOICE
+        """Initialize ElevenLabs TTS client"""
+        self.api_key = config.ELEVENLABS_API_KEY
+        self.voice_id = config.ELEVENLABS_VOICE_ID
+        self.model_id = getattr(config, 'ELEVENLABS_MODEL_ID', 'eleven_turbo_v2')
         self.response_format = getattr(config, 'TTS_RESPONSE_FORMAT', 'pcm')
         self.speed = getattr(config, 'TTS_SPEED', 1.0)
         self.timeout = getattr(config, 'API_TIMEOUT', 10.0)
@@ -50,8 +49,8 @@ class OpenRouterTTS:
             )
         )
         
-        logger.info(f"TTS initialized: model={self.model}, voice={self.voice}, "
-                   f"format={self.response_format}")
+        logger.info(f"ElevenLabs TTS initialized: voice_id={self.voice_id}, "
+                   f"model={self.model_id}, format={self.response_format}")
     
     async def synthesize(self, text: str) -> bytes:
         """
@@ -70,21 +69,23 @@ class OpenRouterTTS:
         try:
             start_time = time.time()
             
-            # Prepare request
+            # Prepare request with updated model
             payload = {
-                "model": self.model,
-                "input": text,
-                "voice": self.voice,
-                "response_format": self.response_format,
-                "speed": self.speed
+                "text": text,
+                "model_id": self.model_id,
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.5
+                }
             }
             
             # Make API request
             response = await self.client.post(
-                f"{self.base_url}/audio/speech",
+                f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}/stream",
                 headers={
-                    "Authorization": f"Bearer {self.api_key}",
+                    "xi-api-key": self.api_key,
                     "Content-Type": "application/json",
+                    "Accept": "audio/pcm" if self.response_format == "pcm" else "audio/mpeg"
                 },
                 json=payload
             )
@@ -103,14 +104,14 @@ class OpenRouterTTS:
                            f"{latency_ms:.0f}ms)")
                 return audio_data
             else:
-                logger.error(f"TTS API error: {response.status_code} - {response.text}")
+                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
                 return b''
                 
         except httpx.TimeoutException:
-            logger.error("TTS API timeout")
+            logger.error("ElevenLabs API timeout")
             return b''
         except Exception as e:
-            logger.error(f"TTS synthesis error: {e}")
+            logger.error(f"ElevenLabs synthesis error: {e}")
             return b''
     
     async def synthesize_stream(self, text: str, chunk_size: int = 50) -> AsyncGenerator[bytes, None]:
@@ -158,37 +159,29 @@ class OpenRouterTTS:
             buffer.append(text_chunk)
             buffer_chars += len(text_chunk)
             
-            # Synthesize when buffer reaches min size
             if buffer_chars >= min_chunk_size:
                 text = ''.join(buffer)
                 
-                # If text is too long, split it
                 if len(text) > max_chunk_size:
-                    # Find a good split point (sentence boundary)
                     split_point = self._find_sentence_boundary(text, max_chunk_size)
                     
                     if split_point > 0:
-                        # Synthesize first part
                         first_part = text[:split_point]
                         audio = await self.synthesize(first_part)
                         if audio:
                             yield audio
                         
-                        # Keep the rest in buffer
                         buffer = [text[split_point:]]
                         buffer_chars = len(buffer[0])
                     else:
-                        # No good split point, synthesize entire buffer
                         audio = await self.synthesize(text)
                         if audio:
                             yield audio
                         buffer = []
                         buffer_chars = 0
                 else:
-                    # Buffer not full enough, continue accumulating
                     continue
         
-        # Synthesize remaining buffer
         if buffer:
             text = ''.join(buffer)
             audio = await self.synthesize(text)
@@ -209,11 +202,10 @@ class OpenRouterTTS:
         if len(text) <= chunk_size:
             return [text]
         
+        import re
         chunks = []
         current_chunk = ""
-        
-        # Split by sentences
-        sentences = self._split_sentences(text)
+        sentences = re.split(r'(?<=[.!?])\s+', text)
         
         for sentence in sentences:
             if len(current_chunk) + len(sentence) <= chunk_size:
@@ -227,21 +219,6 @@ class OpenRouterTTS:
             chunks.append(current_chunk.strip())
         
         return chunks
-    
-    def _split_sentences(self, text: str) -> List[str]:
-        """
-        Split text into sentences
-        
-        Args:
-            text: Text to split
-            
-        Returns:
-            List of sentences
-        """
-        # Simple sentence splitting
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        return [s for s in sentences if s.strip()]
     
     def _find_sentence_boundary(self, text: str, max_len: int) -> int:
         """
@@ -257,12 +234,16 @@ class OpenRouterTTS:
         # Look for sentence-ending punctuation
         for i in range(min(max_len, len(text) - 1), 0, -1):
             if text[i] in '.!?':
-                # Include the punctuation
                 return i + 1
         
         # Look for comma or semicolon as fallback
         for i in range(min(max_len, len(text) - 1), 0, -1):
             if text[i] in ',;':
+                return i + 1
+        
+        # Look for space as fallback
+        for i in range(min(max_len, len(text) - 1), 0, -1):
+            if text[i] == ' ':
                 return i + 1
         
         # No good boundary found
@@ -313,7 +294,7 @@ class StreamingTTS:
     
     def __init__(self):
         """Initialize streaming TTS wrapper"""
-        self.tts = OpenRouterTTS()
+        self.tts = ElevenLabsTTS()
         
         # Buffering
         self.buffer = []
@@ -565,7 +546,7 @@ if __name__ == "__main__":
         test_text = "Hello! This is a test of the text to speech system. " \
                    "It should stream audio with low latency."
         
-        print("Testing TTS Streaming:")
+        print("Testing ElevenLabs TTS Streaming:")
         print("=" * 60)
         
         # Test complete synthesis
@@ -581,39 +562,4 @@ if __name__ == "__main__":
         
         await tts.close()
     
-    async def test_tts_streaming():
-        """Test TTS with streaming text"""
-        tts = StreamingTTS()
-        
-        # Simulate streaming text
-        async def text_stream():
-            text_parts = [
-                "Hello! ",
-                "This is a streaming test. ",
-                "The text is being synthesized in chunks. ",
-                "Each chunk should produce audio with low latency."
-            ]
-            for part in text_parts:
-                yield part
-                await asyncio.sleep(0.1)  # Simulate processing delay
-        
-        print("\nTesting Streaming Text:")
-        print("=" * 60)
-        
-        # Add callback
-        def audio_callback(audio):
-            print(f"Audio callback: {len(audio)} bytes")
-        
-        tts.add_audio_callback(audio_callback)
-        
-        # Stream text
-        audio_chunks = []
-        async for audio in tts.stream_text(text_stream()):
-            audio_chunks.append(audio)
-        
-        print(f"\nTotal chunks: {len(audio_chunks)}")
-        
-        await tts.close()
-    
     asyncio.run(test_tts())
-    asyncio.run(test_tts_streaming())

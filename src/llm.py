@@ -449,36 +449,45 @@ def get_llm() -> StreamingLLM:
 
 
 # Example usage
+# Update the test section in src/llm.py
 if __name__ == "__main__":
     import asyncio
+    import time
     
     async def test_llm():
-        """Test LLM streaming"""
         llm = StreamingLLM()
         
-        # Test query
         query = {
             "text": "What is the capital of France?",
             "intent": "question",
-            "keywords": ["capital", "France"]
         }
-        context = [
-            "France is a country in Western Europe.",
-            "Paris is the capital and largest city of France."
-        ]
+        context = []
         
         print("Testing LLM Streaming:")
         print("=" * 60)
         
-        # Stream response
+        start_time = time.time()
+        first_token_time = None
+        token_count = 0
         response_chunks = []
+        
         async for chunk in llm.stream_response(query, context):
-            print(f"Chunk: {chunk}")
+            if first_token_time is None:
+                first_token_time = (time.time() - start_time) * 1000
+                print(f"⏱️ Time to First Token (TTFT): {first_token_time:.0f}ms")
+            token_count += 1
+            print(f"Chunk {token_count}: {chunk}")
             response_chunks.append(chunk)
         
-        full_response = ''.join(response_chunks)
-        print(f"\nFull response: {full_response}")
-        print(f"\nPerformance: {llm.get_performance_stats()}")
+        total_time = (time.time() - start_time) * 1000
+        
+        print(f"\n📊 Summary:")
+        print(f"  Time to First Token: {first_token_time:.0f}ms")
+        print(f"  Total Response Time: {total_time:.0f}ms")
+        print(f"  Tokens Generated: {token_count}")
+        print(f"  Token Generation Time: {total_time - first_token_time:.0f}ms")
+        print(f"  Avg Time Per Token: {(total_time - first_token_time) / max(1, token_count-1):.0f}ms")
+        print(f"  Performance: {llm.get_performance_stats()}")
         
         await llm.close()
     

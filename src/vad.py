@@ -1,7 +1,9 @@
 """
 Voice Activity Detection (VAD) using Silero VAD.
-Optimized for CPU interference with minimal latency. (<30ms per chunk)
+Optimized for CPU inference with minimal latency. (<30ms per chunk)
 """
+import os
+
 import torch
 import numpy as np
 from typing import Union, Optional
@@ -19,9 +21,16 @@ class SileroVAD:
         Initialize the Silero VAD model.
         Loads the pre-trained model from the torchhub.
         """
-        self.sample_rate = config.SAMPLE_RATE
+        self.sample_rate = config.VAD_SAMPLE_RATE
         self.threshold = config.VAD_THRESHOLD
         self._model = None
+        
+        # FIX 1: Initialize performance tracking BEFORE loading model
+        self.total_inferences = 0
+        self.total_latency_ms = 0.0
+
+        os.environ['TORCH_HUB_DIR'] = str(os.path.join(config.MODELS_DIR, "silero_vad"))
+        
         self._load_model()
 
         logger.info(f"VAD initialized: sample_rate={self.sample_rate}, threshold={self.threshold}")
@@ -30,17 +39,22 @@ class SileroVAD:
         """Load the Silero VAD model from torchhub."""
         try:
             start_time = time.time()
-            self._model = torch.hub.load(
+            self._model, _ = torch.hub.load(
                 repo_or_dir='snakers4/silero-vad',
                 model='silero_vad',
                 force_reload=False,
-                onnx=False
+                onnx=False,
+                trust_repo=True,
+                source='github'
             )
 
             # Set the eval mode
             self._model.eval()
-            loaf_time = (time.time() - start_time)*1000
-            logger.info(f"Silero VAD model loaded in {loaf_time:.2f} ms")
+            
+            # FIX 2: Fix typo - 'load_time' instead of 'loaf_time'
+            load_time = (time.time() - start_time) * 1000
+            logger.info(f"Silero VAD model loaded in {load_time:.2f} ms")
+            
         except Exception as e:
             logger.error(f"Failed to load Silero VAD model: {e}")
             raise RuntimeError("Could not load Silero VAD model") from e
@@ -56,8 +70,8 @@ class SileroVAD:
             bool: True if speech is detected, False otherwise.
         """
         if self._model is None:
+            # FIX 3: Remove unreachable return statement
             raise RuntimeError("VAD model is not loaded")
-            return False
         
         try:
             start_time = time.time()
@@ -71,7 +85,7 @@ class SileroVAD:
                 logger.warning(f"Unsupported audio chunk type: {type(audio_chunk)}")
                 return False
             
-            # Validate audio link
+            # Validate audio length
             if len(audio_np) == 0:
                 logger.warning("Received empty audio chunk")
                 return False
@@ -79,22 +93,22 @@ class SileroVAD:
             # Convert to torch tensor
             audio_tensor = torch.from_numpy(audio_np)
 
-            # Run interference with gradient tracking
+            # Run inference with gradient tracking disabled
             with torch.no_grad():
                 speech_prob = self._model(audio_tensor, self.sample_rate)
 
-            # Check if speech probability exceeds threshhold
+            # Check if speech probability exceeds threshold
             is_speech = speech_prob > self.threshold
 
             # Track performance
             latency_ms = (time.time() - start_time) * 1000
-            self.total_interferences += 1
+            self.total_inferences += 1
             self.total_latency_ms += latency_ms
 
-            # Occational logging info
-            if self.total_interferences % 100 == 0:
-                avg_latency = self.total_latency_ms / self.total_interferences
-                logger.info(f"VAD average latency over {self.total_interferences} interferences: {avg_latency:.2f} ms")
+            # Occasional logging info
+            if self.total_inferences % 100 == 0:
+                avg_latency = self.total_latency_ms / self.total_inferences
+                logger.info(f"VAD average latency over {self.total_inferences} inferences: {avg_latency:.2f} ms")
 
             return bool(is_speech)
         
@@ -176,7 +190,8 @@ class SileroVAD:
         else:
             logger.warning(f"Invalid threshold value: {new_threshold}. Must be between 0.0 and 1.0")
 
-# Singletone instance for global use
+
+# Singleton instance for global use
 _vad_instance = None
 
 def get_vad() -> SileroVAD:
@@ -192,20 +207,28 @@ def get_vad() -> SileroVAD:
     return _vad_instance
 
 
-# Testing usage
 if __name__ == "__main__":
     # Test VAD with sample audio
     import time
     
     vad = SileroVAD()
     
-    # Create a test audio chunk (1 second of silence)
-    silence = np.zeros(16000, dtype=np.float32)
+    # VAD expects exactly 512 samples at 16kHz (32ms)
+    chunk_size = 512
     
-    # Create a test audio chunk (1 second of noise)
-    noise = np.random.randn(16000).astype(np.float32) * 0.1
+    # Create a test audio chunk (512 samples of silence)
+    silence = np.zeros(chunk_size, dtype=np.float32)
+    
+    # Create a test audio chunk (512 samples of noise)
+    noise = np.random.randn(chunk_size).astype(np.float32) * 0.1
+    
+    # Optional: simulated speech
+    t = np.linspace(0, chunk_size/16000, chunk_size)
+    speech = 0.3 * np.sin(2 * np.pi * 200 * t) + 0.3 * np.sin(2 * np.pi * 400 * t)
+    speech = speech.astype(np.float32)
     
     print("Testing VAD...")
     print(f"Silence detection: {vad.is_speech(silence)}")
     print(f"Noise detection: {vad.is_speech(noise)}")
+    print(f"Speech detection: {vad.is_speech(speech)}")
     print(f"Performance stats: {vad.get_performance_stats()}")

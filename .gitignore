@@ -3,6 +3,7 @@ CLAUDE.md
 .env
 .env.local
 .env.*.local
+.claudeignore
 
 # Python
 venv/

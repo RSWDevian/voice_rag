@@ -9,12 +9,19 @@ class Config:
     # OpenRouter Configuration
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_TIMEOUT: int = int(os.getenv("OPENROUTER_TIMEOUT", "30"))
     
     # Model Selection
-    STT_MODEL: str = os.getenv("STT_MODEL", "openai/whisper-large-v3")
+    STT_MODEL: str = os.getenv("STT_MODEL", "google/gemini-2.5-flash")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini:nitro")
+    ELEVENLABS_API_KEY: Optional[str] = os.getenv("ELEVENLABS_API_KEY")
+    ELEVENLABS_VOICE_ID: Optional[str] = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    ELEVENLABS_MODEL_ID: str = os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2")
     TTS_MODEL: str = os.getenv("TTS_MODEL", "openai/gpt-4o-mini-tts-2025-12-15")
     TTS_VOICE: str = os.getenv("TTS_VOICE", "alloy")
+    TTS_RESPONSE_FORMAT: str = os.getenv("TTS_RESPONSE_FORMAT", "mp3")
+    TTS_SPEED: float = float(os.getenv("TTS_SPEED", "1.0"))
+    TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
     
     # LLM Settings
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "150"))
