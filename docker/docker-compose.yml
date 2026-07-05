@@ -1,0 +1,56 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # ============= MAIN APPLICATION =============
+  streaming-rag:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: streaming-rag-app
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - STT_MODEL=${STT_MODEL:-openai/whisper-large-v3-turbo}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-4o-mini:nitro}
+      - TTS_MODEL=${TTS_MODEL:-eleven_turbo_v2}
+      - TTS_VOICE=${TTS_VOICE:-21m00Tcm4TlvDq8ikWAM}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Persist downloaded models across container restarts
+      - ./models:/app/models
+      # Persist document data
+      - ./data:/app/data
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist embeddings cache
+      - ./data/embeddings:/app/data/embeddings
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # ============= OPTIONAL: REDIS CACHE =============
+  redis:
+    image: redis:7-alpine
+    container_name: streaming-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  redis-data:
