@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STT Test - Speech to Text</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f1a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 1px solid #2a2a4a;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+            color: #7c3aed;
+            font-size: 28px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-record {
+            background: #7c3aed;
+            color: white;
+        }
+        .btn-record:hover { background: #6d28d9; transform: scale(1.02); }
+        .btn-record.active { background: #dc2626; animation: pulse 1s infinite; }
+        .btn-stop { background: #374151; color: white; }
+        .btn-stop:hover { background: #4b5563; }
+        .btn-clear { background: #1f2937; color: #9ca3af; }
+        .btn-clear:hover { background: #374151; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            background: #1f2937;
+            color: #9ca3af;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .status .dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status .dot.idle { background: #6b7280; }
+        .status .dot.listening { background: #f59e0b; animation: pulse 1s infinite; }
+        .status .dot.processing { background: #7c3aed; animation: pulse 0.5s infinite; }
+        .status .dot.success { background: #10b981; }
+        .status .dot.error { background: #dc2626; }
+
+        .text-box {
+            background: #0f0f1a;
+            border: 1px solid #2a2a4a;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 150px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 18px;
+            line-height: 1.8;
+            color: #e5e7eb;
+            margin-bottom: 16px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .text-box .placeholder {
+            color: #4b5563;
+            font-style: italic;
+        }
+
+        .latency {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .metric {
+            background: #0f0f1a;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #1f2937;
+        }
+        .metric .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #7c3aed;
+        }
+        .metric .label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+        .metric .value.good { color: #10b981; }
+        .metric .value.warning { color: #f59e0b; }
+        .metric .value.bad { color: #dc2626; }
+
+        .transcript-history {
+            margin-top: 16px;
+        }
+        .transcript-history h3 {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .transcript-history .item {
+            padding: 8px 12px;
+            background: #0f0f1a;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            font-size: 14px;
+            color: #9ca3af;
+            border-left: 3px solid #7c3aed;
+        }
+        .transcript-history .item .time {
+            color: #4b5563;
+            font-size: 12px;
+            margin-right: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 STT Test</h1>
+        <p class="subtitle">Speech-to-Text - Speak and see the transcription</p>
+
+        <div class="controls">
+            <button id="recordBtn" class="btn btn-record">🎙️ Record</button>
+            <button id="stopBtn" class="btn btn-stop" disabled>⏹ Stop</button>
+            <button id="clearBtn" class="btn btn-clear">🗑️ Clear</button>
+        </div>
+
+        <div class="status">
+            <span>
+                <span class="dot idle" id="statusDot"></span>
+                <span id="statusText">Ready</span>
+            </span>
+            <span id="latencyDisplay">Latency: -- ms</span>
+        </div>
+
+        <div class="text-box" id="transcriptDisplay">
+            <span class="placeholder">Press "Record" and speak...</span>
+        </div>
+
+        <div class="latency">
+            <div class="metric">
+                <div class="value" id="vadLatency">--</div>
+                <div class="label">VAD (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="sttLatency">--</div>
+                <div class="label">STT (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="totalLatency">--</div>
+                <div class="label">Total (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="wordCount">0</div>
+                <div class="label">Words</div>
+            </div>
+        </div>
+
+        <div class="transcript-history">
+            <h3>📜 History</h3>
+            <div id="historyContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let audioStream = null;
+        let audioContext = null;
+        let audioSource = null;
+        let audioProcessor = null;
+        let isRecording = false;
+        let startTime = 0;
+        let transcriptCount = 0;
+        let audioBuffer = [];
+
+        // Backend VAD/STT expect raw mono 16-bit PCM at 16kHz, so capture via
+        // Web Audio API instead of MediaRecorder (which only emits compressed
+        // webm/opus containers the backend can't decode).
+        function floatTo16BitPCM(input) {
+            const output = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+                const s = Math.max(-1, Math.min(1, input[i]));
+                output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            return output;
+        }
+
+        const DOM = {
+            recordBtn: document.getElementById('recordBtn'),
+            stopBtn: document.getElementById('stopBtn'),
+            clearBtn: document.getElementById('clearBtn'),
+            transcriptDisplay: document.getElementById('transcriptDisplay'),
+            statusText: document.getElementById('statusText'),
+            statusDot: document.getElementById('statusDot'),
+            latencyDisplay: document.getElementById('latencyDisplay'),
+            vadLatency: document.getElementById('vadLatency'),
+            sttLatency: document.getElementById('sttLatency'),
+            totalLatency: document.getElementById('totalLatency'),
+            wordCount: document.getElementById('wordCount'),
+            historyContainer: document.getElementById('historyContainer'),
+        };
+
+        function updateStatus(text, type) {
+            DOM.statusText.textContent = text;
+            DOM.statusDot.className = `dot ${type}`;
+        }
+
+        function updateLatency(vad, stt, total) {
+            if (vad !== undefined && vad !== null) {
+                DOM.vadLatency.textContent = Math.round(vad);
+                DOM.vadLatency.className = `value ${vad < 30 ? 'good' : vad < 60 ? 'warning' : 'bad'}`;
+            }
+            if (stt !== undefined && stt !== null) {
+                DOM.sttLatency.textContent = Math.round(stt);
+                DOM.sttLatency.className = `value ${stt < 500 ? 'good' : stt < 1000 ? 'warning' : 'bad'}`;
+            }
+            if (total !== undefined && total !== null) {
+                DOM.totalLatency.textContent = Math.round(total);
+                DOM.totalLatency.className = `value ${total < 800 ? 'good' : total < 1500 ? 'warning' : 'bad'}`;
+                DOM.latencyDisplay.textContent = `Latency: ${Math.round(total)} ms`;
+            }
+        }
+
+        function addTranscript(text) {
+            if (!text || text.trim() === '') return;
+            
+            transcriptCount++;
+            DOM.wordCount.textContent = transcriptCount;
+            
+            // Update display
+            DOM.transcriptDisplay.innerHTML = text;
+            DOM.transcriptDisplay.className = 'text-box';
+
+            // Add to history
+            const item = document.createElement('div');
+            item.className = 'item';
+            const time = new Date().toLocaleTimeString();
+            item.innerHTML = `<span class="time">${time}</span> ${text}`;
+            DOM.historyContainer.prepend(item);
+
+            // Keep only last 10
+            while (DOM.historyContainer.children.length > 10) {
+                DOM.historyContainer.removeChild(DOM.historyContainer.lastChild);
+            }
+        }
+
+        async function startRecording() {
+            try {
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+
+                // Use the STT-only WebSocket endpoint
+                ws = new WebSocket('ws://localhost:8000/stt_stream');
+
+                ws.onopen = () => {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    audioSource = audioContext.createMediaStreamSource(audioStream);
+                    audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                    audioProcessor.onaudioprocess = (event) => {
+                        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                        const pcm16 = floatTo16BitPCM(event.inputBuffer.getChannelData(0));
+                        startTime = Date.now();
+                        ws.send(pcm16.buffer);
+                    };
+
+                    // ScriptProcessorNode only fires while connected to a destination;
+                    // route through a muted gain node to avoid echoing the mic back out.
+                    const silentGain = audioContext.createGain();
+                    silentGain.gain.value = 0;
+                    audioSource.connect(audioProcessor);
+                    audioProcessor.connect(silentGain);
+                    silentGain.connect(audioContext.destination);
+
+                    updateStatus('🎤 Listening...', 'listening');
+                    DOM.recordBtn.disabled = true;
+                    DOM.recordBtn.classList.add('active');
+                    DOM.stopBtn.disabled = false;
+                    isRecording = true;
+                    audioBuffer = [];
+                    console.log('WebSocket connected, recording started');
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('Received:', data);
+                        
+                        if (data.type === 'transcript') {
+                            addTranscript(data.transcript);
+                            updateLatency(data.vad_latency, data.stt_latency, data.total_latency);
+                            updateStatus('🎤 Listening...', 'listening');
+                        } else if (data.type === 'error') {
+                            updateStatus(`❌ ${data.error}`, 'error');
+                            console.error('STT Error:', data.error);
+                        } else if (data.type === 'processing') {
+                            updateStatus('⏳ Processing...', 'processing');
+                        }
+                    } catch (e) {
+                        // Binary data - ignore for STT test
+                        console.log('Received binary data (ignored)');
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket closed');
+                    if (isRecording) {
+                        updateStatus('❌ Disconnected', 'error');
+                    }
+                    DOM.recordBtn.disabled = false;
+                    DOM.recordBtn.classList.remove('active');
+                    DOM.stopBtn.disabled = true;
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateStatus('❌ WebSocket Error', 'error');
+                };
+
+            } catch (error) {
+                console.error('Error:', error);
+                updateStatus(`❌ ${error.message}`, 'error');
+                DOM.recordBtn.disabled = false;
+                DOM.recordBtn.classList.remove('active');
+            }
+        }
+
+        function stopRecording() {
+            console.log('Stopping recording...');
+            if (audioProcessor) {
+                audioProcessor.disconnect();
+                audioProcessor.onaudioprocess = null;
+                audioProcessor = null;
+            }
+            if (audioSource) {
+                audioSource.disconnect();
+                audioSource = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            isRecording = false;
+            DOM.recordBtn.disabled = false;
+            DOM.recordBtn.classList.remove('active');
+            DOM.stopBtn.disabled = true;
+            updateStatus('⏸️ Stopped', 'idle');
+        }
+
+        function clearTranscripts() {
+            DOM.transcriptDisplay.innerHTML = `<span class="placeholder">Press "Record" and speak...</span>`;
+            DOM.transcriptDisplay.className = 'text-box';
+            DOM.historyContainer.innerHTML = '';
+            transcriptCount = 0;
+            DOM.wordCount.textContent = '0';
+            updateLatency(null, null, null);
+            DOM.latencyDisplay.textContent = 'Latency: -- ms';
+            audioBuffer = [];
+        }
+
+        DOM.recordBtn.addEventListener('click', startRecording);
+        DOM.stopBtn.addEventListener('click', stopRecording);
+        DOM.clearBtn.addEventListener('click', clearTranscripts);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ' && e.target === document.body) {
+                e.preventDefault();
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            }
+            if (e.key === 'Escape') {
+                if (isRecording) {
+                    stopRecording();
+                }
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (isRecording) {
+                stopRecording();
+            }
+        });
+
+        console.log('STT Test Page Loaded');
+        console.log('Click "Record" or press Space to start speaking');
+    </script>
+</body>
+</html>

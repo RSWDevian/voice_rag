@@ -674,8 +674,14 @@
         const state = {
             ws: null,
             isRecording: false,
+            startingRecording: false,
             mediaRecorder: null,
             audioStream: null,
+            audioContext: null,
+            audioSource: null,
+            audioProcessor: null,
+            playbackContext: null,
+            playbackTime: 0,
             isProcessing: false,
             startTime: 0,
             transcripts: [],
@@ -728,7 +734,7 @@
         // ============================================
         // WEBSOCKET CONNECTION
         // ============================================
-        function connectWebSocket() {
+        function connectWebSocket(autoStart = false) {
             const wsUrl = `ws://${window.location.host}/stream`;
             state.ws = new WebSocket(wsUrl);
 
@@ -736,7 +742,13 @@
                 updateStatus('connected', 'Connected');
                 DOM.connectionTime.textContent = `Connected: ${new Date().toLocaleTimeString()}`;
                 showToast('Connected to server', 'success');
-                startRecording();
+                // Only auto-grab the mic for connects the user actually asked for
+                // (initial page load, or clicking Start) - not background
+                // reconnects, otherwise a dropped connection silently restarts
+                // recording (including right after the user hit Stop).
+                if (autoStart) {
+                    startRecording();
+                }
             };
 
             state.ws.onmessage = (event) => {
@@ -744,7 +756,13 @@
                     // Text message (metadata or error)
                     try {
                         const data = JSON.parse(event.data);
-                        if (data.error) {
+                        if (data.type === 'transcript' && data.transcript) {
+                            // Sent immediately after STT, before LLM/TTS run -
+                            // visible confirmation that voice detection + STT
+                            // are working inside the real /stream flow.
+                            DOM.transcriptDisplay.textContent = data.transcript;
+                            DOM.transcriptDisplay.classList.add('active');
+                        } else if (data.error) {
                             showToast(`Error: ${data.error}`, 'error');
                             updateStatus('error', 'Error');
                         }
@@ -769,10 +787,11 @@
             state.ws.onclose = () => {
                 updateStatus('disconnected', 'Disconnected');
                 stopRecording();
-                // Auto-reconnect after delay
+                // Auto-reconnect after delay, but never auto-resume recording -
+                // the user must explicitly click Start again.
                 setTimeout(() => {
                     if (!state.isRecording) {
-                        connectWebSocket();
+                        connectWebSocket(false);
                     }
                 }, 3000);
             };
@@ -781,7 +800,31 @@
         // ============================================
         // AUDIO HANDLING
         // ============================================
+        // Backend VAD/STT expect raw mono 16-bit PCM at 16kHz, so we capture
+        // via Web Audio API instead of MediaRecorder (which only emits
+        // compressed webm/opus containers the backend can't decode).
+        function floatTo16BitPCM(input) {
+            const output = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+                const s = Math.max(-1, Math.min(1, input[i]));
+                output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            return output;
+        }
+
         async function startRecording() {
+            // Guard against concurrent starts (e.g. clicking Start while the
+            // mic permission prompt from an auto-start is still pending) -
+            // otherwise a second getUserMedia/AudioContext/ScriptProcessor
+            // pipeline spins up and sends duplicate, interleaved PCM chunks.
+            // state.audioStream alone isn't enough: it's only set AFTER the
+            // getUserMedia() await resolves, so two near-simultaneous calls
+            // can both pass that check before either finishes (TOCTOU race) -
+            // startingRecording is set synchronously, before any await, to
+            // close that gap.
+            if (state.isRecording || state.audioStream || state.startingRecording) return;
+            state.startingRecording = true;
+
             try {
                 state.audioStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
@@ -792,19 +835,26 @@
                     }
                 });
 
-                state.mediaRecorder = new MediaRecorder(state.audioStream, {
-                    mimeType: 'audio/webm;codecs=opus',
-                    audioBitsPerSecond: 16000
-                });
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                state.audioSource = state.audioContext.createMediaStreamSource(state.audioStream);
+                state.audioProcessor = state.audioContext.createScriptProcessor(4096, 1, 1);
 
-                state.mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0 && state.ws && state.ws.readyState === WebSocket.OPEN) {
-                        state.startTime = Date.now();
-                        state.ws.send(event.data);
-                    }
+                state.audioProcessor.onaudioprocess = (event) => {
+                    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+                    const pcm16 = floatTo16BitPCM(event.inputBuffer.getChannelData(0));
+                    state.startTime = Date.now();
+                    state.ws.send(pcm16.buffer);
                 };
 
-                state.mediaRecorder.start(100); // Send chunks every 100ms
+                // ScriptProcessorNode only fires while connected to a destination;
+                // route through a muted gain node to avoid echoing the mic back out.
+                const silentGain = state.audioContext.createGain();
+                silentGain.gain.value = 0;
+                state.audioSource.connect(state.audioProcessor);
+                state.audioProcessor.connect(silentGain);
+                silentGain.connect(state.audioContext.destination);
+
+                state.playbackTime = 0;
                 state.isRecording = true;
                 updateStatus('processing', 'Recording...');
 
@@ -817,15 +867,28 @@
                 console.error('Error starting recording:', error);
                 showToast(`Microphone error: ${error.message}`, 'error');
                 updateStatus('error', 'Microphone Error');
+            } finally {
+                state.startingRecording = false;
             }
         }
 
         function stopRecording() {
-            if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
-                state.mediaRecorder.stop();
+            if (state.audioProcessor) {
+                state.audioProcessor.disconnect();
+                state.audioProcessor.onaudioprocess = null;
+                state.audioProcessor = null;
+            }
+            if (state.audioSource) {
+                state.audioSource.disconnect();
+                state.audioSource = null;
+            }
+            if (state.audioContext) {
+                state.audioContext.close();
+                state.audioContext = null;
             }
             if (state.audioStream) {
                 state.audioStream.getTracks().forEach(track => track.stop());
+                state.audioStream = null;
             }
             if (state.ws && state.ws.readyState === WebSocket.OPEN) {
                 state.ws.close();
@@ -837,23 +900,45 @@
             showToast('Recording stopped', 'info');
         }
 
-        function handleAudioResponse(data) {
+        async function handleAudioResponse(data) {
             const latency = Date.now() - state.startTime;
             updateLatencyDisplay(latency);
 
-            // Play audio
-            const audioBlob = new Blob([data], { type: 'audio/pcm' });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            audio.play();
+            // TTS response is raw mono 16-bit PCM at 16kHz, not a browser-decodable
+            // container, so it must be converted into an AudioBuffer manually.
+            const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
+            if (arrayBuffer.byteLength < 2) return;
 
-            // Update status
+            const pcm16 = new Int16Array(arrayBuffer);
+            const float32 = new Float32Array(pcm16.length);
+            for (let i = 0; i < pcm16.length; i++) {
+                float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7fff);
+            }
+
+            if (!state.playbackContext) {
+                state.playbackContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            }
+            const audioBuffer = state.playbackContext.createBuffer(1, float32.length, 16000);
+            audioBuffer.copyToChannel(float32, 0);
+
+            const source = state.playbackContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(state.playbackContext.destination);
+
+            // Schedule sequentially so consecutive streamed chunks don't overlap
+            const now = state.playbackContext.currentTime;
+            const startAt = Math.max(now, state.playbackTime);
+            source.start(startAt);
+            state.playbackTime = startAt + audioBuffer.duration;
+
             updateStatus('connected', 'Playing Response');
             DOM.responseDisplay.classList.add('speaking');
 
-            audio.onended = () => {
-                DOM.responseDisplay.classList.remove('speaking');
-                updateStatus('connected', 'Listening...');
+            source.onended = () => {
+                if (state.playbackContext.currentTime >= state.playbackTime - 0.01) {
+                    DOM.responseDisplay.classList.remove('speaking');
+                    updateStatus('connected', 'Listening...');
+                }
             };
         }
 
@@ -940,12 +1025,15 @@
                     const data = JSON.parse(text);
 
                     // Send to server for ingestion
+                    const docs = Array.isArray(data) ? data : (data.documents || []);
                     const response = await fetch('/rag/ingest', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            filename: file.name,
-                            data: data
+                            documents: docs.map(d => ({
+                                text: d.text,
+                                metadata: d.metadata || { category: d.category, source: d.source, id: d.id }
+                            }))
                         })
                     });
 
@@ -982,7 +1070,7 @@
         async function indexDocuments() {
             showUploadStatus('Re-indexing all documents...', 'processing');
             try {
-                const response = await fetch('/rag/index', { method: 'POST' });
+                const response = await fetch('/rag/reindex', { method: 'POST' });
                 const result = await response.json();
 
                 if (result.success) {
@@ -1001,7 +1089,7 @@
             if (!confirm('Are you sure you want to clear all documents?')) return;
 
             try {
-                const response = await fetch('/rag/clear', { method: 'POST' });
+                const response = await fetch('/rag/documents', { method: 'DELETE' });
                 const result = await response.json();
 
                 if (result.success) {
@@ -1173,11 +1261,16 @@
         // EVENT LISTENERS
         // ============================================
         DOM.startBtn.addEventListener('click', () => {
-            if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-                connectWebSocket();
-            } else {
+            if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
+                connectWebSocket(true);
+            } else if (state.ws.readyState === WebSocket.OPEN) {
                 startRecording();
             }
+            // else: readyState === CONNECTING - a connect is already in flight
+            // (e.g. the page-load auto-connect); its own onopen will call
+            // startRecording(). Opening a second WebSocket here would spin up
+            // a second concurrent capture pipeline against the same backend
+            // pipeline singleton and corrupt its shared audio buffer/VAD state.
         });
 
         DOM.stopBtn.addEventListener('click', stopRecording);
@@ -1198,8 +1291,8 @@
         // INITIALIZATION
         // ============================================
         function init() {
-            // Auto-connect on load
-            setTimeout(connectWebSocket, 500);
+            // Auto-connect and auto-start recording on load
+            setTimeout(() => connectWebSocket(true), 500);
 
             // Start metrics polling
             setInterval(pollMetrics, 2000);
@@ -1271,8 +1364,10 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        filename: 'sample_documents.json',
-                        data: sampleData
+                        documents: sampleData.map(d => ({
+                            text: d.text,
+                            metadata: { id: d.id, category: d.category, source: d.source }
+                        }))
                     })
                 });
 

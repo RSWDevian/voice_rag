@@ -72,7 +72,7 @@ docker run -p 8000:8000 --env-file .env streaming-rag
 | Category | Method | Endpoint | Description | Request Body | Response |
 |----------|--------|----------|-------------|--------------|----------|
 | **WebSocket** | WS | `/stream` | Real-time audio streaming. Send PCM audio chunks, receive PCM audio response. | Binary audio (PCM 16kHz, int16) | Binary audio (PCM) |
-| **Voice & Query** | POST | `/query` | Process a text query through the RAG pipeline | `{"text": "Your question here", "context": []}` | `{"success": true, "response": "...", "intent": "...", "confidence": 0.9, "latency_ms": 123}` |
+| **Voice & Query** | POST | `/query` | Process a text query through the RAG pipeline | `{"text": "Your question here", "context": []}` | `{"success": true, "response": "...", "context": [...], "latency_ms": 123}` |
 | | GET | `/` | Demo UI interface | - | HTML page |
 | **RAG - Ingest** | POST | `/rag/ingest` | Ingest documents via JSON payload | `{"documents": [{"text": "...", "metadata": {...}}], "collection": "default"}` | `{"success": true, "count": 2, "message": "...", "timestamp": 123}` |
 | | POST | `/rag/ingest/file` | Ingest documents from uploaded JSON file | Multipart form with `file` | `{"success": true, "count": 2, "filename": "...", "message": "...", "timestamp": 123}` |

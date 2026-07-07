@@ -6,6 +6,7 @@ Supports multiple models with latency optimization
 import base64
 import asyncio
 import time
+import wave
 from typing import List, Optional, AsyncGenerator
 from io import BytesIO
 import httpx
@@ -43,7 +44,24 @@ class OpenRouterSTT:
         )
 
         logger.info(f"STT initialized: model={self.model}, sample_rate={self.sample_rate}, timeout={self.timeout}s")
-    
+
+    def _pcm_to_wav(self, pcm_bytes: bytes) -> bytes:
+        """
+        Wrap raw 16-bit mono PCM in a WAV header.
+
+        The chat-completions input_audio schema has no sample_rate field for
+        raw "pcm16" data, so a receiving model has to guess the rate - a
+        self-describing WAV header removes that ambiguity (and the garbled/
+        pitch-shifted audio it was causing the model to hallucinate over).
+        """
+        buf = BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # int16
+            wf.setframerate(self.sample_rate)
+            wf.writeframes(pcm_bytes)
+        return buf.getvalue()
+
     async def transcribe(self, audio_bytes: bytes, language: str = "en") -> Optional[str]:
         """
         Transcribe audio bytes to text using OpenRouter STT
@@ -62,14 +80,18 @@ class OpenRouterSTT:
         try:
             start_time = time.time()
             
-            # Encode audio as base64
-            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+            # Encode audio as base64 - wrapped in a WAV header so the receiving
+            # model knows the actual sample rate/channels/bit depth instead of
+            # guessing (see _pcm_to_wav).
+            wav_bytes = self._pcm_to_wav(audio_bytes)
+            audio_base64 = base64.b64encode(wav_bytes).decode('utf-8')
 
             # OpenRouter has no dedicated /audio/transcriptions endpoint - audio
             # goes in as an input_audio content block on a normal chat completion,
             # routed to a multimodal model that accepts audio input.
             payload = {
                 "model": self.model,
+                "temperature": 0,
                 "messages": [
                     {
                         "role": "user",
@@ -77,13 +99,14 @@ class OpenRouterSTT:
                             {
                                 "type": "text",
                                 "text": f"Transcribe this audio exactly as spoken, in {language}. "
-                                        f"Reply with only the transcription, no commentary."
+                                        f"Reply with only the transcription, no commentary. "
+                                        f"If there is no clear speech, reply with an empty string."
                             },
                             {
                                 "type": "input_audio",
                                 "input_audio": {
                                     "data": audio_base64,
-                                    "format": "pcm16"
+                                    "format": "wav"
                                 }
                             }
                         ]

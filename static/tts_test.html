@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Test - Text to Speech</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f1a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 1px solid #2a2a4a;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+            color: #10b981;
+            font-size: 28px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            background: #0f0f1a;
+            border: 1px solid #2a2a4a;
+            border-radius: 10px;
+            padding: 16px;
+            color: #e5e7eb;
+            font-size: 18px;
+            font-family: inherit;
+            resize: vertical;
+            margin-bottom: 16px;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #10b981;
+        }
+        textarea::placeholder {
+            color: #4b5563;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-speak {
+            background: #10b981;
+            color: white;
+        }
+        .btn-speak:hover { background: #059669; transform: scale(1.02); }
+        .btn-speak:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-speak.active { background: #dc2626; animation: pulse 1s infinite; }
+        .btn-stop-tts { background: #374151; color: white; }
+        .btn-stop-tts:hover { background: #4b5563; }
+        .btn-clear-tts { background: #1f2937; color: #9ca3af; }
+        .btn-clear-tts:hover { background: #374151; }
+        .btn-voice { background: #1f2937; color: #9ca3af; padding: 10px 16px; min-width: auto; flex: 0; }
+        .btn-voice:hover { background: #374151; }
+        .btn-voice.active { background: #7c3aed; color: white; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            background: #1f2937;
+            color: #9ca3af;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .status .dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status .dot.idle { background: #6b7280; }
+        .status .dot.speaking { background: #10b981; animation: pulse 1s infinite; }
+        .status .dot.success { background: #10b981; }
+        .status .dot.error { background: #dc2626; }
+
+        .latency {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .metric {
+            background: #0f0f1a;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #1f2937;
+        }
+        .metric .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #10b981;
+        }
+        .metric .label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+        .metric .value.good { color: #10b981; }
+        .metric .value.warning { color: #f59e0b; }
+        .metric .value.bad { color: #dc2626; }
+
+        .presets {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .preset-btn {
+            padding: 6px 14px;
+            border: 1px solid #2a2a4a;
+            border-radius: 20px;
+            background: #0f0f1a;
+            color: #9ca3af;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+        .preset-btn:hover {
+            border-color: #10b981;
+            color: #10b981;
+        }
+
+        .audio-visualizer {
+            height: 60px;
+            background: #0f0f1a;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #1f2937;
+            overflow: hidden;
+        }
+        .audio-visualizer .bars {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            height: 40px;
+        }
+        .audio-visualizer .bar {
+            width: 8px;
+            background: #10b981;
+            border-radius: 4px;
+            transition: height 0.1s;
+        }
+        .audio-visualizer .bar.inactive {
+            height: 10px !important;
+            background: #1f2937;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔊 TTS Test</h1>
+        <p class="subtitle">Text-to-Speech - Type text and hear it spoken</p>
+
+        <div class="presets">
+            <button class="preset-btn" onclick="setText('Hello! This is a test of the text to speech system.')">Hello Test</button>
+            <button class="preset-btn" onclick="setText('The weather today is sunny with a high of 25 degrees.')">Weather</button>
+            <button class="preset-btn" onclick="setText('Your complaint has been registered. The ticket number is one two three four five.')">Ticket Number</button>
+            <button class="preset-btn" onclick="setText('Thank you for calling the Nagar Nigam helpline. How can I help you today?')">Helpline</button>
+        </div>
+
+        <textarea id="ttsText" placeholder="Type text to speak...">Hello! This is a test of the text to speech system.</textarea>
+
+        <div class="controls">
+            <button id="speakBtn" class="btn btn-speak">🔊 Speak</button>
+            <button id="stopTtsBtn" class="btn btn-stop-tts" disabled>⏹ Stop</button>
+            <button id="clearTtsBtn" class="btn btn-clear-tts">🗑️ Clear</button>
+        </div>
+
+        <div class="audio-visualizer" id="visualizer">
+            <div class="bars" id="bars"></div>
+        </div>
+
+        <div class="status">
+            <span>
+                <span class="dot idle" id="ttsStatusDot"></span>
+                <span id="ttsStatusText">Ready</span>
+            </span>
+            <span id="ttsLatencyDisplay">Latency: -- ms</span>
+        </div>
+
+        <div class="latency">
+            <div class="metric">
+                <div class="value" id="ttsFirstToken">--</div>
+                <div class="label">First Audio (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="ttsTotalTime">--</div>
+                <div class="label">Total Time (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="ttsAudioBytes">0</div>
+                <div class="label">Audio Bytes</div>
+            </div>
+            <div class="metric">
+                <div class="value" id="ttsChunks">0</div>
+                <div class="label">Audio Chunks</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px; padding: 12px; background: #0f0f1a; border-radius: 8px; border: 1px solid #1f2937;">
+            <div style="color: #6b7280; font-size: 12px; margin-bottom: 4px;">Voice:</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn-voice active" data-voice="21m00Tcm4TlvDq8ikWAM">Rachel</button>
+                <button class="btn-voice" data-voice="EXAVITQu4L4D4JX3s4mY">Bella</button>
+                <button class="btn-voice" data-voice="ErXwobaYiN019PkySvjV">Antoni</button>
+                <button class="btn-voice" data-voice="TxGEqnHWrfWFTfGW9XjX">Josh</button>
+                <button class="btn-voice" data-voice="pNInz6obpgDQGcFmaJgB">Adam</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentVoice = '21m00Tcm4TlvDq8ikWAM';
+        const PCM_SAMPLE_RATE = 16000; // matches output_format=pcm_16000 hardcoded in tts.py
+        let audioContext = null;
+        let nextStartTime = 0;
+        let activeSources = [];
+        let isSpeaking = false;
+        let audioChunks = [];
+        let totalAudioBytes = 0;
+
+        // Must be called synchronously from within a user-gesture handler (click),
+        // before any `await`, otherwise the browser's autoplay policy leaves the
+        // context suspended and it will never produce sound.
+        function ensureAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.log('[TTS] AudioContext created, state:', audioContext.state);
+            }
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().then(() => {
+                    console.log('[TTS] AudioContext resumed, state:', audioContext.state);
+                });
+            }
+            return audioContext;
+        }
+
+        // Server sends raw headerless PCM (16-bit signed LE, mono, 16kHz —
+        // ElevenLabs "pcm_16000" format per TTS_RESPONSE_FORMAT=pcm). Decode it
+        // directly into an AudioBuffer instead of going through <audio>/Blob URLs,
+        // which sidesteps browser format-sniffing entirely.
+        function playPcmChunk(pcmArrayBuffer) {
+            const int16 = new Int16Array(pcmArrayBuffer);
+            if (int16.length === 0) return;
+
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) {
+                float32[i] = int16[i] / 32768;
+            }
+
+            const audioBuffer = audioContext.createBuffer(1, float32.length, PCM_SAMPLE_RATE);
+            audioBuffer.getChannelData(0).set(float32);
+
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+
+            const now = audioContext.currentTime;
+            const startAt = Math.max(now, nextStartTime);
+            source.start(startAt);
+            nextStartTime = startAt + audioBuffer.duration;
+
+            activeSources.push(source);
+            source.onended = () => {
+                activeSources = activeSources.filter(s => s !== source);
+            };
+
+            console.log(`[TTS] scheduled chunk: ${audioBuffer.duration.toFixed(3)}s at ctx time ${startAt.toFixed(3)} (ctx state: ${audioContext.state})`);
+        }
+
+        const DOM = {
+            ttsText: document.getElementById('ttsText'),
+            speakBtn: document.getElementById('speakBtn'),
+            stopTtsBtn: document.getElementById('stopTtsBtn'),
+            clearTtsBtn: document.getElementById('clearTtsBtn'),
+            ttsStatusText: document.getElementById('ttsStatusText'),
+            ttsStatusDot: document.getElementById('ttsStatusDot'),
+            ttsLatencyDisplay: document.getElementById('ttsLatencyDisplay'),
+            ttsFirstToken: document.getElementById('ttsFirstToken'),
+            ttsTotalTime: document.getElementById('ttsTotalTime'),
+            ttsAudioBytes: document.getElementById('ttsAudioBytes'),
+            ttsChunks: document.getElementById('ttsChunks'),
+            visualizer: document.getElementById('visualizer'),
+            bars: document.getElementById('bars'),
+        };
+
+        // Initialize visualizer bars
+        for (let i = 0; i < 20; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'bar inactive';
+            bar.id = `bar-${i}`;
+            DOM.bars.appendChild(bar);
+        }
+
+        function updateTtsStatus(text, type) {
+            DOM.ttsStatusText.textContent = text;
+            DOM.ttsStatusDot.className = `dot ${type}`;
+        }
+
+        function updateTtsLatency(firstToken, total, bytes, chunks) {
+            if (firstToken) {
+                DOM.ttsFirstToken.textContent = Math.round(firstToken);
+                DOM.ttsFirstToken.className = `value ${firstToken < 150 ? 'good' : firstToken < 300 ? 'warning' : 'bad'}`;
+            }
+            if (total) {
+                DOM.ttsTotalTime.textContent = Math.round(total);
+                DOM.ttsTotalTime.className = `value ${total < 800 ? 'good' : total < 1500 ? 'warning' : 'bad'}`;
+                DOM.ttsLatencyDisplay.textContent = `Latency: ${Math.round(total)} ms`;
+            }
+            if (bytes) {
+                DOM.ttsAudioBytes.textContent = bytes;
+            }
+            if (chunks !== undefined) {
+                DOM.ttsChunks.textContent = chunks;
+            }
+        }
+
+        function setText(text) {
+            DOM.ttsText.value = text;
+        }
+
+        function animateVisualizer(audioData) {
+            const bars = document.querySelectorAll('.bar');
+            if (audioData) {
+                const values = new Uint8Array(audioData);
+                for (let i = 0; i < bars.length && i < values.length; i++) {
+                    const height = Math.max(5, (values[i] / 255) * 40);
+                    bars[i].style.height = `${height}px`;
+                    bars[i].className = 'bar';
+                }
+            } else {
+                bars.forEach(bar => {
+                    bar.className = 'bar inactive';
+                });
+            }
+        }
+
+        async function speakText() {
+            const text = DOM.ttsText.value.trim();
+            if (!text) {
+                alert('Please enter some text to speak.');
+                return;
+            }
+
+            if (isSpeaking) {
+                stopTts();
+                return;
+            }
+
+            try {
+                // Create/resume the AudioContext synchronously, still within the
+                // click gesture, before any awaited work happens.
+                ensureAudioContext();
+
+                isSpeaking = true;
+                DOM.speakBtn.textContent = '⏹ Speaking...';
+                DOM.speakBtn.className = 'btn btn-speak active';
+                DOM.stopTtsBtn.disabled = false;
+                audioChunks = [];
+                totalAudioBytes = 0;
+                activeSources = [];
+                nextStartTime = audioContext.currentTime;
+                updateTtsStatus('🔊 Speaking...', 'speaking');
+
+                const startTime = performance.now();
+                let firstChunkTime = null;
+
+                // Connect to TTS WebSocket
+                const ws = new WebSocket('ws://localhost:8000/tts_stream');
+
+                ws.onopen = () => {
+                    ws.send(JSON.stringify({
+                        type: 'tts_request',
+                        text: text,
+                        voice: currentVoice
+                    }));
+                };
+
+                ws.onmessage = (event) => {
+                    if (event.data instanceof Blob) {
+                        if (firstChunkTime === null) {
+                            firstChunkTime = performance.now() - startTime;
+                            updateTtsLatency(firstChunkTime, null, null, 0);
+                        }
+                        
+                        audioChunks.push(event.data);
+                        totalAudioBytes += event.data.size;
+
+                        // Update visualizer and schedule the raw PCM chunk for playback.
+                        event.data.arrayBuffer().then(buffer => {
+                            animateVisualizer(new Uint8Array(buffer.slice(0, 20)));
+                            playPcmChunk(buffer);
+                        });
+
+                        updateTtsStatus(`🔊 Speaking... (${audioChunks.length} chunks)`, 'speaking');
+                        updateTtsLatency(null, null, totalAudioBytes, audioChunks.length);
+                    } else if (typeof event.data === 'string') {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.error) {
+                                updateTtsStatus(`❌ ${data.error}`, 'error');
+                                stopTts();
+                            }
+                        } catch (e) {}
+                    }
+                };
+
+                ws.onclose = () => {
+                    const totalTime = performance.now() - startTime;
+                    updateTtsStatus(`✅ Complete (${totalTime.toFixed(0)}ms)`, 'success');
+                    updateTtsLatency(firstChunkTime, totalTime, totalAudioBytes, audioChunks.length);
+                    // All bytes have arrived, but scheduled audio may still be
+                    // playing (playback takes real time; the network transfer is
+                    // near-instant). Only reset the UI here — do NOT stop the
+                    // AudioBufferSourceNodes, or already-scheduled chunks get cut off.
+                    isSpeaking = false;
+                    waitForPlaybackToFinish();
+                };
+
+                ws.onerror = () => {
+                    updateTtsStatus('❌ Connection error', 'error');
+                    stopTts();
+                };
+
+                // Store websocket reference to close it
+                window._ttsWs = ws;
+
+            } catch (error) {
+                console.error('TTS error:', error);
+                updateTtsStatus(`❌ ${error.message}`, 'error');
+                stopTts();
+            }
+        }
+
+        // Resets the Speak/Stop button state once scheduled audio has actually
+        // finished playing (without interrupting it). Safe to call repeatedly.
+        function waitForPlaybackToFinish() {
+            const remainingMs = audioContext ? Math.max(0, (nextStartTime - audioContext.currentTime) * 1000) : 0;
+            setTimeout(() => {
+                if (activeSources.length > 0) {
+                    // Still playing (e.g. a later chunk arrived) - check again shortly.
+                    waitForPlaybackToFinish();
+                    return;
+                }
+                DOM.speakBtn.textContent = '🔊 Speak';
+                DOM.speakBtn.className = 'btn btn-speak';
+                DOM.stopTtsBtn.disabled = true;
+                animateVisualizer(null);
+            }, remainingMs + 50);
+        }
+
+        // Hard stop: kills any in-flight audio immediately. Used by the Stop
+        // button and error paths - NOT called on a normal stream completion.
+        function stopTts() {
+            isSpeaking = false;
+            if (window._ttsWs && window._ttsWs.readyState === WebSocket.OPEN) {
+                window._ttsWs.close();
+            }
+            activeSources.forEach(source => {
+                try { source.stop(); } catch (e) {}
+            });
+            activeSources = [];
+            if (audioContext) {
+                nextStartTime = audioContext.currentTime;
+            }
+            DOM.speakBtn.textContent = '🔊 Speak';
+            DOM.speakBtn.className = 'btn btn-speak';
+            DOM.stopTtsBtn.disabled = true;
+            animateVisualizer(null);
+            if (!DOM.ttsStatusText.textContent.includes('Complete')) {
+                updateTtsStatus('⏹ Stopped', 'idle');
+            }
+        }
+
+        DOM.speakBtn.addEventListener('click', speakText);
+        DOM.stopTtsBtn.addEventListener('click', stopTts);
+        DOM.clearTtsBtn.addEventListener('click', () => {
+            DOM.ttsText.value = '';
+            updateTtsLatency(null, null, 0, 0);
+            DOM.ttsLatencyDisplay.textContent = 'Latency: -- ms';
+            DOM.ttsAudioBytes.textContent = '0';
+            DOM.ttsChunks.textContent = '0';
+            updateTtsStatus('Ready', 'idle');
+            animateVisualizer(null);
+        });
+
+        // Voice selection
+        document.querySelectorAll('.btn-voice').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.btn-voice').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentVoice = btn.dataset.voice;
+            });
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                speakText();
+            }
+        });
+    </script>
+</body>
+</html>

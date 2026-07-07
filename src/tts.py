@@ -79,6 +79,10 @@ class ElevenLabsTTS:
                 }
             }
             
+            # ElevenLabs selects format via the `output_format` query param, not
+            # content negotiation - Accept alone silently falls back to mp3.
+            params = {"output_format": "pcm_16000"} if self.response_format == "pcm" else {}
+
             # Make API request
             response = await self.client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}/stream",
@@ -87,6 +91,7 @@ class ElevenLabsTTS:
                     "Content-Type": "application/json",
                     "Accept": "audio/pcm" if self.response_format == "pcm" else "audio/mpeg"
                 },
+                params=params,
                 json=payload
             )
             

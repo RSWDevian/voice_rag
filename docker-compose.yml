@@ -2,7 +2,6 @@
 version: '3.8'
 
 services:
-  # ============= MAIN APPLICATION =============
   streaming-rag:
     build:
       context: .
@@ -19,25 +18,18 @@ services:
       - TTS_VOICE=${TTS_VOICE:-21m00Tcm4TlvDq8ikWAM}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      # Persist downloaded models across container restarts
+      # Mount folders (Docker creates them if they don't exist)
       - ./models:/app/models
-      # Persist document data
-      - ./data:/app/data
-      # Persist logs
-      - ./logs:/app/logs
-      # Persist embeddings cache
+      - ./data:/app/data          # ← Docker will create this folder
+      - ./logs:/app/logs          # ← Docker will create this folder
       - ./data/embeddings:/app/data/embeddings
+      # Live-reload: bind-mount source so edits show up without a rebuild.
+      # static/ is served straight off disk (no restart needed); src/ changes
+      # are picked up by uvicorn --reload (see docker/Dockerfile CMD).
+      - ./src:/app/src
+      - ./static:/app/static
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '2'
-        reservations:
-          memory: 1G
-          cpus: '1'
 
-  # ============= OPTIONAL: REDIS CACHE =============
   redis:
     image: redis:7-alpine
     container_name: streaming-rag-redis
@@ -47,10 +39,6 @@ services:
       - redis-data:/data
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    deploy:
-      resources:
-        limits:
-          memory: 256M
 
 volumes:
   redis-data:
