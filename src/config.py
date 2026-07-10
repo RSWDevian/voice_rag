@@ -11,6 +11,10 @@ class Config:
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENROUTER_TIMEOUT: int = int(os.getenv("OPENROUTER_TIMEOUT", "30"))
     
+    # STT Engine Selection
+    # "v1" -> src/stt.py (OpenRouter API), "v2" -> src/stt_v2.py (local Moonshine)
+    STT_ENGINE: str = os.getenv("STT_ENGINE", "v1")
+
     # Model Selection
     STT_MODEL: str = os.getenv("STT_MODEL", "google/gemini-2.5-flash")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini:nitro")

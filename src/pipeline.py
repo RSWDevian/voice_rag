@@ -11,7 +11,10 @@ from collections import deque
 
 from src.config import config
 from src.vad import get_vad
-from src.stt import get_stt
+if config.STT_ENGINE == "v2":
+    from src.stt_v2 import get_stt
+else:
+    from src.stt import get_stt
 from src.vector_search import get_vector_search
 from src.query_builder import get_query_builder
 from src.llm import get_llm
