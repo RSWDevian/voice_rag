@@ -19,6 +19,7 @@ dist/
 pip-delete-this-directory.txt
 
 # Models
+models/
 *.pt
 *.pth
 *.bin
