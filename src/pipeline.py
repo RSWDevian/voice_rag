@@ -17,8 +17,14 @@ else:
     from src.stt import get_stt
 from src.vector_search import get_vector_search
 from src.query_builder import get_query_builder
-from src.llm import get_llm
-from src.tts import get_tts
+if config.LLM_ENGINE == "v2":
+    from src.llm_v2 import get_llm
+else:
+    from src.llm import get_llm
+if config.TTS_ENGINE == "v2":
+    from src.tts_v2 import get_tts
+else:
+    from src.tts import get_tts
 from src.metrics import get_metrics_collector
 from src.utils.logger import get_logger
 

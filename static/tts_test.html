@@ -250,13 +250,14 @@
 
         <div style="margin-top: 16px; padding: 12px; background: #0f0f1a; border-radius: 8px; border: 1px solid #1f2937;">
             <div style="color: #6b7280; font-size: 12px; margin-bottom: 4px;">Voice:</div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <div id="voiceButtons" style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <button class="btn-voice active" data-voice="21m00Tcm4TlvDq8ikWAM">Rachel</button>
                 <button class="btn-voice" data-voice="EXAVITQu4L4D4JX3s4mY">Bella</button>
                 <button class="btn-voice" data-voice="ErXwobaYiN019PkySvjV">Antoni</button>
                 <button class="btn-voice" data-voice="TxGEqnHWrfWFTfGW9XjX">Josh</button>
                 <button class="btn-voice" data-voice="pNInz6obpgDQGcFmaJgB">Adam</button>
             </div>
+            <div id="voiceEngineNote" style="display: none; color: #f59e0b; font-size: 12px; margin-top: 8px;"></div>
         </div>
     </div>
 
@@ -550,6 +551,24 @@
                 speakText();
             }
         });
+
+        // The voice buttons above are ElevenLabs voice IDs (v1 engine only) -
+        // Piper (v2) always speaks with a single voice fixed at server
+        // startup (PIPER_VOICE), so /tts_stream silently ignores them
+        // whenever TTS_ENGINE=v2. Grey the buttons out and say so instead of
+        // leaving a control that looks functional but does nothing.
+        fetch('/info').then(r => r.json()).then(info => {
+            if (info.engines && info.engines.tts === 'v2') {
+                document.querySelectorAll('.btn-voice').forEach(btn => {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.4';
+                    btn.style.cursor = 'not-allowed';
+                });
+                const note = document.getElementById('voiceEngineNote');
+                note.textContent = `Voice selection is unavailable: TTS_ENGINE=v2 (local Piper) speaks with a single fixed voice (${info.models.tts}).`;
+                note.style.display = 'block';
+            }
+        }).catch(() => {});
     </script>
 </body>
 </html>

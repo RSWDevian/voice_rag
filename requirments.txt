@@ -8,6 +8,9 @@ python-dotenv==1.0.0
 # OpenRouter Client (HTTP)
 httpx==0.25.1
 
+# Groq Client (evaluating as a faster STT/LLM/TTS alternative)
+groq==1.5.0
+
 # ML/AI (Local)
 torch==2.4.1
 torchaudio==2.4.1
@@ -36,3 +39,6 @@ soundfile==0.12.1
 
 # STT v2 - local on-device Moonshine ASR (Linux x86_64/arm64, macOS)
 moonshine-voice==0.0.65
+
+# TTS v2 - local on-device Piper TTS
+piper-tts==1.4.2

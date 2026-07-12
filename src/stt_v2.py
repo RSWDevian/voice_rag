@@ -4,6 +4,16 @@ Runs the Moonshine Medium Streaming model fully on-device (no network round trip
 ~269ms latency on Linux x86. Same public interface as src/stt.py (get_stt() ->
 StreamingSTT with process_audio/process_stream/reset/close), so callers only need
 to change their import from `src.stt` to `src.stt_v2`.
+
+Uses Moonshine's native streaming API (Transcriber.create_stream() ->
+Stream.add_audio()/update_transcription()) rather than repeatedly buffering
+audio into independent chunks and re-running transcribe_without_streaming()
+on each one - the latter re-runs the encoder over each chunk from scratch
+with no memory of prior audio, which is both slower (full chunk-duration
+buffering delay before every result) and lower quality (context is lost at
+chunk boundaries). A single Stream carries the C++ engine's internal audio/
+model state across add_audio() calls, so update_transcription() only does
+the incremental work for the newly added audio.
 """
 
 import asyncio
@@ -17,6 +27,13 @@ from src.config import config
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# Stream.add_audio() has its own built-in update_transcription() trigger based
+# on update_interval, but it discards the returned Transcript - so it can't be
+# used to hand partials back to our callers. We disable it (a large interval
+# means the internal duration check never fires) and call
+# update_transcription() ourselves wherever we need the return value.
+_DISABLE_STREAM_AUTO_UPDATE = 3600.0
 
 
 class MoonshineSTT:
@@ -56,10 +73,21 @@ class MoonshineSTT:
         return (int16.astype(np.float32) / 32768.0).tolist()
 
     def _transcribe_sync(self, audio_data: List[float]) -> str:
-        transcript = self.transcriber.transcribe_without_streaming(
-            audio_data, sample_rate=self.sample_rate
-        )
-        return " ".join(line.text for line in transcript.lines).strip()
+        # One-shot call routed through the same streaming Stream API as
+        # stream_transcribe(), for consistency: a single add_audio() +
+        # update_transcription() on a short-lived stream.
+        stream = self.transcriber.create_stream(update_interval=_DISABLE_STREAM_AUTO_UPDATE)
+        try:
+            stream.start()
+            stream.add_audio(audio_data, sample_rate=self.sample_rate)
+            # Note: stream.stop()'s built-in final update_transcription() call
+            # behaves differently from calling update_transcription() directly
+            # here - it comes back empty even when audio was actually added -
+            # so the transcript is always read via an explicit call instead.
+            transcript = stream.update_transcription()
+            return " ".join(line.text for line in transcript.lines).strip()
+        finally:
+            stream.close()
 
     async def transcribe(self, audio_bytes: bytes, language: str = "en") -> Optional[str]:
         """
@@ -123,38 +151,57 @@ class MoonshineSTT:
 
     async def stream_transcribe(self, audio_stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[str, None]:
         """
-        Stream audio and transcribe in chunks
+        True streaming transcription: audio chunks are fed incrementally into
+        a single Moonshine Stream (preserving encoder/context state across
+        calls) and update_transcription() is polled every ASR_CHUNK_DURATION
+        seconds of buffered audio, instead of re-transcribing independent
+        chunks from scratch.
 
         Args:
-            audio_stream: Async generator of audio bytes
+            audio_stream: Async generator of audio bytes (int16 PCM chunks)
 
         Yields:
-            str: Partial transcriptions as they become available
+            str: The accumulated transcript so far, each time it changes
+                (Moonshine's Transcript reflects all lines seen in this
+                stream to date, not just the newest chunk).
         """
-        buffer = []
-        buffer_duration = 0.0
-        chunk_duration = 0.03  # 30ms per chunk
+        loop = asyncio.get_event_loop()
+        chunk_duration = 0.03  # 30ms per chunk, matches the VAD frame size upstream
         target_duration = config.ASR_CHUNK_DURATION
 
-        async for audio_chunk in audio_stream:
-            buffer.append(audio_chunk)
-            buffer_duration += chunk_duration
+        async with self._lock:
+            stream = await loop.run_in_executor(
+                None, self.transcriber.create_stream, _DISABLE_STREAM_AUTO_UPDATE
+            )
+            try:
+                await loop.run_in_executor(None, stream.start)
 
-            if buffer_duration >= target_duration:
-                combined = b''.join(buffer)
-                transcript = await self.transcribe(combined)
+                buffered_duration = 0.0
+                last_transcript = ""
 
-                buffer = []
-                buffer_duration = 0.0
+                async for audio_chunk in audio_stream:
+                    audio_data = self._pcm16_to_float(audio_chunk)
+                    await loop.run_in_executor(None, stream.add_audio, audio_data, self.sample_rate)
+                    buffered_duration += chunk_duration
 
-                if transcript:
-                    yield transcript
+                    if buffered_duration >= target_duration:
+                        buffered_duration = 0.0
+                        transcript = await loop.run_in_executor(None, stream.update_transcription)
+                        text = " ".join(line.text for line in transcript.lines).strip()
+                        if text and text != last_transcript:
+                            last_transcript = text
+                            yield text
 
-        if buffer:
-            combined = b''.join(buffer)
-            transcript = await self.transcribe(combined)
-            if transcript:
-                yield transcript
+                # Final flush of whatever's left in the buffer. Deliberately
+                # not using stream.stop() here - see the note in
+                # _transcribe_sync() about its built-in update_transcription()
+                # call coming back empty.
+                transcript = await loop.run_in_executor(None, stream.update_transcription)
+                text = " ".join(line.text for line in transcript.lines).strip()
+                if text and text != last_transcript:
+                    yield text
+            finally:
+                await loop.run_in_executor(None, stream.close)
 
     def get_performance_stats(self) -> dict:
         """Get STT performance statistics"""

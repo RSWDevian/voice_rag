@@ -26,9 +26,21 @@ class Config:
     TTS_RESPONSE_FORMAT: str = os.getenv("TTS_RESPONSE_FORMAT", "mp3")
     TTS_SPEED: float = float(os.getenv("TTS_SPEED", "1.0"))
     TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
+
+    # TTS Engine Selection
+    # "v1" -> src/tts.py (ElevenLabs API), "v2" -> src/tts_v2.py (local Piper)
+    TTS_ENGINE: str = os.getenv("TTS_ENGINE", "v2")
+    PIPER_VOICE: str = os.getenv("PIPER_VOICE", "en_US-lessac-medium")
+    PIPER_USE_CUDA: bool = os.getenv("PIPER_USE_CUDA", "false").lower() == "true"
     
+    # LLM Engine Selection
+    # "v1" -> src/llm.py (OpenRouter API), "v2" -> src/llm_v2.py (local Ollama)
+    LLM_ENGINE: str = os.getenv("LLM_ENGINE", "v1")
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "ibm/granite3.1-moe:1b")
+
     # LLM Settings
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "150"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "80"))
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     
     # VAD Settings
@@ -36,7 +48,7 @@ class Config:
     VAD_SAMPLE_RATE: int = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
     
     # ASR Settings
-    ASR_CHUNK_DURATION: float = float(os.getenv("ASR_CHUNK_DURATION", "2.0"))
+    ASR_CHUNK_DURATION: float = float(os.getenv("ASR_CHUNK_DURATION", "0.5"))
     
     # Vector Search
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")

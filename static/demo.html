@@ -762,6 +762,11 @@
                             // are working inside the real /stream flow.
                             DOM.transcriptDisplay.textContent = data.transcript;
                             DOM.transcriptDisplay.classList.add('active');
+                        } else if (data.type === 'response' && data.response) {
+                            // Sent once the LLM has finished generating, in
+                            // parallel with the TTS audio already streaming.
+                            DOM.responseDisplay.textContent = data.response;
+                            DOM.responseDisplay.classList.add('active');
                         } else if (data.error) {
                             showToast(`Error: ${data.error}`, 'error');
                             updateStatus('error', 'Error');

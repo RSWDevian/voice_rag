@@ -22,9 +22,27 @@ from src.pipeline import get_pipeline, get_simple_pipeline
 from src.metrics import get_metrics_collector
 from src.vector_search import get_vector_search
 from src.utils.logger import get_logger
-from src.tts import get_tts
+if config.TTS_ENGINE == "v2":
+    from src.tts_v2 import get_tts
+else:
+    from src.tts import get_tts
 
 logger = get_logger(__name__)
+
+
+def _active_component_models() -> Dict[str, str]:
+    """
+    Model actually serving requests right now, accounting for engine
+    selection - config.STT_MODEL/LLM_MODEL/TTS_MODEL are the v1 (API-backed)
+    model names and stay unchanged regardless of which engine is selected, so
+    reporting them unconditionally in /health, /info, and the startup log
+    would misreport reality whenever STT_ENGINE/LLM_ENGINE/TTS_ENGINE is "v2".
+    """
+    return {
+        "stt": "moonshine (local, v2)" if config.STT_ENGINE == "v2" else config.STT_MODEL,
+        "llm": f"{config.OLLAMA_MODEL} (local, v2)" if config.LLM_ENGINE == "v2" else config.LLM_MODEL,
+        "tts": f"piper/{config.PIPER_VOICE} (local, v2)" if config.TTS_ENGINE == "v2" else config.TTS_MODEL,
+    }
 
 
 # ============================================
@@ -59,7 +77,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=" * 60)
     logger.info("Streaming RAG Voice Assistant Starting")
-    logger.info(f"OpenRouter Models: STT={config.STT_MODEL}, LLM={config.LLM_MODEL}, TTS={config.TTS_MODEL}")
+    active_models = _active_component_models()
+    logger.info(f"Active models: STT={active_models['stt']}, LLM={active_models['llm']}, TTS={active_models['tts']}")
     logger.info(f"Latency Target: < 800ms")
     logger.info("=" * 60)
     
@@ -163,14 +182,15 @@ async def health_check():
     """Health check endpoint"""
     health_status = metrics.get_health_status()
     
+    active_models = _active_component_models()
     return {
         "status": health_status["status"],
         "timestamp": time.time(),
         "version": "1.0.0",
         "config": {
-            "stt_model": config.STT_MODEL,
-            "llm_model": config.LLM_MODEL,
-            "tts_model": config.TTS_MODEL,
+            "stt_model": active_models["stt"],
+            "llm_model": active_models["llm"],
+            "tts_model": active_models["tts"],
             "max_tokens": config.LLM_MAX_TOKENS,
             "temperature": config.LLM_TEMPERATURE
         },
@@ -471,30 +491,62 @@ async def websocket_endpoint(websocket: WebSocket):
             metrics.record_latency("vector_search", (time.time() - vector_start) * 1000)
             context = [r["text"] for r in search_results]
 
-            # 4. LLM (streamed) + 5. TTS per chunk
-            response_text = ""
-            first_token = True
-            llm_start = time.time()
+            # 4. LLM (streamed) + 5. TTS, pipelined through StreamingTTS's own
+            # buffering instead of one synthesize_text() call per tiny LLM
+            # chunk. StreamingTTS.stream_text() (src/tts_v2.py) already
+            # buffers/splits text at sentence boundaries across an entire
+            # input stream - but calling tts.synthesize_text(llm_chunk) fresh
+            # for every ~3-token LLM chunk resets that buffer to empty on
+            # every single call, so one response fragmented into dozens of
+            # tiny TTS calls, each paying its own ~100ms overhead serially,
+            # all counted against the "llm" timer below (which wrapped the
+            # whole loop, TTS included). Feeding the LLM's own generator
+            # straight into stream_text() once lets it batch properly.
+            response_text_parts = []
+            first_token_latency_ms = None
+            llm_tts_start = time.time()
 
-            async for llm_chunk in llm.stream_response(query, context):
-                if first_token:
-                    logger.info(f"LLM first token: {(time.time() - llm_start) * 1000:.0f}ms")
-                    first_token = False
-                response_text += llm_chunk
+            async def _llm_text_stream():
+                nonlocal first_token_latency_ms
+                async for llm_chunk in llm.stream_response(query, context):
+                    if first_token_latency_ms is None:
+                        first_token_latency_ms = (time.time() - llm_tts_start) * 1000
+                        logger.info(f"LLM first token: {first_token_latency_ms:.0f}ms")
+                    response_text_parts.append(llm_chunk)
+                    yield llm_chunk
 
-                tts_start = time.time()
-                async for audio_out in tts.synthesize_text(llm_chunk):
-                    try:
-                        await websocket.send_bytes(audio_out)
-                    except WebSocketDisconnect:
-                        logger.info("WebSocket disconnected during send")
-                        raise
-                metrics.record_latency("tts", (time.time() - tts_start) * 1000)
+            async for audio_out in tts.stream_text(_llm_text_stream()):
+                try:
+                    await websocket.send_bytes(audio_out)
+                except WebSocketDisconnect:
+                    logger.info("WebSocket disconnected during send")
+                    raise
 
-            metrics.record_latency("llm", (time.time() - llm_start) * 1000)
+            # "llm" is time-to-first-token (matches the CLAUDE.md target);
+            # the combined figure - LLM generation with TTS synthesis and
+            # websocket sends interleaved throughout - is inherently
+            # inseparable now that they're pipelined together, so it's
+            # recorded under its own name rather than mislabeled as either.
+            # Per-chunk TTS cost is still visible via tts.get_performance_stats()
+            # (PiperTTS tracks its own avg_latency_ms internally).
+            llm_tts_latency_ms = (time.time() - llm_tts_start) * 1000
+            metrics.record_latency("llm", first_token_latency_ms if first_token_latency_ms is not None else llm_tts_latency_ms)
+            metrics.record_latency("llm_tts_stream", llm_tts_latency_ms)
+
+            response_text = "".join(response_text_parts)
             logger.info(f"Response: '{response_text}'")
 
             if response_text:
+                # The frontend's "Response" display box (see demo.html
+                # DOM.responseDisplay) is only ever populated by the /query
+                # HTTP endpoint otherwise - it stays stuck on its placeholder
+                # text through a live /stream voice interaction without this.
+                await websocket.send_text(json.dumps({
+                    "type": "response",
+                    "response": response_text,
+                    "timestamp": time.time()
+                }))
+
                 query_builder.update_context(query, response_text)
                 metrics.record_latency("total_pipeline", (time.time() - utterance_start) * 1000)
 
@@ -927,6 +979,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.get("/info")
 async def get_info():
     """Get application information"""
+    active_models = _active_component_models()
     return {
         "name": "Streaming RAG Voice Assistant",
         "version": "1.0.0",
@@ -942,10 +995,15 @@ async def get_info():
             "performance_metrics": True,
             "document_ingestion": True
         },
+        "engines": {
+            "stt": config.STT_ENGINE,
+            "llm": config.LLM_ENGINE,
+            "tts": config.TTS_ENGINE
+        },
         "models": {
-            "stt": config.STT_MODEL,
-            "llm": config.LLM_MODEL,
-            "tts": config.TTS_MODEL,
+            "stt": active_models["stt"],
+            "llm": active_models["llm"],
+            "tts": active_models["tts"],
             "embedding": config.EMBEDDING_MODEL
         },
         "vector_search": {
@@ -993,32 +1051,45 @@ async def tts_stream_endpoint(websocket: WebSocket):
             return
         
         logger.info(f"TTS Request: text='{text[:50]}...', voice={voice}")
-        
-        # Override voice for this test
-        original_voice = config.ELEVENLABS_VOICE_ID
-        config.ELEVENLABS_VOICE_ID = voice
-        
+
+        # The per-request voice override only makes sense for the ElevenLabs
+        # engine (v1) - Piper (v2) uses a single voice fixed at model-load
+        # time (PIPER_VOICE), so mutating ELEVENLABS_VOICE_ID here would be a
+        # silent no-op against tts_test.html's voice buttons (all ElevenLabs
+        # voice IDs) whenever TTS_ENGINE=v2.
+        using_elevenlabs = config.TTS_ENGINE != "v2"
+        original_voice = config.ELEVENLABS_VOICE_ID if using_elevenlabs else None
+        if using_elevenlabs:
+            config.ELEVENLABS_VOICE_ID = voice
+        else:
+            logger.debug(
+                f"Ignoring requested voice='{voice}' - active TTS engine is Piper (v2), "
+                f"which always uses PIPER_VOICE={config.PIPER_VOICE}"
+            )
+
         try:
             tts = get_tts()
             chunk_count = 0
-            
+
             # Stream audio chunks as raw PCM
             async for audio_chunk in tts.synthesize_text(text):
-                # audio_chunk is already raw PCM bytes from ElevenLabs
+                # Raw PCM bytes, 16kHz mono int16 - from ElevenLabs (v1) or
+                # Piper (v2) depending on TTS_ENGINE.
                 chunk_count += 1
                 logger.debug(f"Sending chunk {chunk_count}: {len(audio_chunk)} bytes")
-                
+
                 # Send as binary (raw PCM)
                 await websocket.send_bytes(audio_chunk)
-                
+
                 # Small delay for streaming feel
                 await asyncio.sleep(0.01)
-            
+
             logger.info(f"TTS complete: {chunk_count} chunks sent")
-            
+
         finally:
             # Restore original voice
-            config.ELEVENLABS_VOICE_ID = original_voice
+            if using_elevenlabs:
+                config.ELEVENLABS_VOICE_ID = original_voice
         
         await websocket.close()
         
@@ -1054,7 +1125,32 @@ async def stt_stream_endpoint(websocket: WebSocket):
     speech_detected = False
     silence_counter = 0
     max_silence = 5  # 150ms silence = end of speech
-    
+
+    # stt_test.html reads data.vad_latency/stt_latency/total_latency off every
+    # transcript message - last_vad_latency_ms tracks the most recent VAD call
+    # (VAD runs once per incoming chunk, not once per utterance) and
+    # utterance_start_time marks when the current utterance's buffering began,
+    # so total_latency reflects speech-start to transcript-ready.
+    last_vad_latency_ms = 0.0
+    utterance_start_time = None
+
+    async def _finish_utterance(reason: str):
+        nonlocal audio_buffer, buffer_duration, speech_detected, silence_counter, utterance_start_time
+        logger.info(f"Processing buffer ({reason}): {len(audio_buffer)} bytes")
+        try:
+            await websocket.send_text(json.dumps({"type": "processing"}))
+        except Exception:
+            pass
+        transcript, stt_latency_ms = await process_stt_buffer(audio_buffer, stt)
+        if transcript:
+            total_latency_ms = (time.time() - utterance_start_time) * 1000 if utterance_start_time else stt_latency_ms
+            await send_transcript(websocket, transcript, last_vad_latency_ms, stt_latency_ms, total_latency_ms)
+        audio_buffer = bytearray()
+        buffer_duration = 0.0
+        speech_detected = False
+        silence_counter = 0
+        utterance_start_time = None
+
     try:
         while True:
             try:
@@ -1066,13 +1162,7 @@ async def stt_stream_endpoint(websocket: WebSocket):
             except asyncio.TimeoutError:
                 # If we have buffered audio, process it after timeout
                 if len(audio_buffer) > 0:
-                    logger.info(f"Processing buffer on timeout: {len(audio_buffer)} bytes")
-                    transcript = await process_stt_buffer(audio_buffer, stt)
-                    if transcript:
-                        await send_transcript(websocket, transcript)
-                    audio_buffer = bytearray()
-                    buffer_duration = 0.0
-                    speech_detected = False
+                    await _finish_utterance("timeout")
                 continue
             except WebSocketDisconnect:
                 logger.info("STT WebSocket disconnected")
@@ -1080,62 +1170,50 @@ async def stt_stream_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.error(f"STT WebSocket receive error: {e}")
                 break
-            
+
             # Check if audio chunk is valid
             if not audio_chunk or len(audio_chunk) < 100:
                 continue
-            
+
             # Run VAD
             try:
+                vad_start = time.time()
                 is_speech = vad.process_chunk(audio_chunk)
+                last_vad_latency_ms = (time.time() - vad_start) * 1000
             except Exception as e:
                 logger.error(f"VAD error: {e}")
                 continue
-            
+
             if is_speech is None:
                 continue
-            
+
             if is_speech:
                 # Speech detected
+                if not speech_detected:
+                    utterance_start_time = time.time()
                 speech_detected = True
                 silence_counter = 0
                 audio_buffer.extend(audio_chunk)
                 buffer_duration += len(audio_chunk) / 2 / config.VAD_SAMPLE_RATE
-                
+
                 # Process when buffer is full (2 seconds)
                 if buffer_duration >= config.ASR_CHUNK_DURATION:
-                    logger.info(f"Processing speech buffer: {len(audio_buffer)} bytes")
-                    transcript = await process_stt_buffer(audio_buffer, stt)
-                    if transcript:
-                        await send_transcript(websocket, transcript)
-                    audio_buffer = bytearray()
-                    buffer_duration = 0.0
-                    speech_detected = False
+                    await _finish_utterance("speech buffer full")
             else:
                 # Silence
                 if speech_detected:
                     silence_counter += 1
                     # End of speech after 150ms silence
                     if silence_counter >= max_silence:
-                        logger.info(f"Processing buffer after silence: {len(audio_buffer)} bytes")
-                        transcript = await process_stt_buffer(audio_buffer, stt)
-                        if transcript:
-                            await send_transcript(websocket, transcript)
-                        audio_buffer = bytearray()
-                        buffer_duration = 0.0
-                        speech_detected = False
-                        silence_counter = 0
+                        await _finish_utterance("after silence")
                 else:
                     # No speech yet, ignore silence
                     pass
-        
+
         # Process remaining buffer on close
         if len(audio_buffer) > 0:
-            logger.info(f"Processing final buffer: {len(audio_buffer)} bytes")
-            transcript = await process_stt_buffer(audio_buffer, stt)
-            if transcript:
-                await send_transcript(websocket, transcript)
-        
+            await _finish_utterance("final flush")
+
     except WebSocketDisconnect:
         logger.info("STT WebSocket disconnected")
     except Exception as e:
@@ -1148,41 +1226,49 @@ async def stt_stream_endpoint(websocket: WebSocket):
         logger.info("STT WebSocket connection closed")
 
 
-async def process_stt_buffer(audio_buffer: bytearray, stt) -> Optional[str]:
-    """Process the audio buffer through STT"""
+async def process_stt_buffer(audio_buffer: bytearray, stt) -> tuple[Optional[str], float]:
+    """Process the audio buffer through STT, returning (transcript, stt_latency_ms)"""
     if len(audio_buffer) < 512:  # Minimum 512 samples
         logger.debug(f"Buffer too small: {len(audio_buffer)} bytes")
-        return None
-    
+        return None, 0.0
+
     try:
         stt_start = time.time()
-        
+
         # Convert buffer to list for STT
         audio_chunks = [bytes(audio_buffer)]
         transcript = await stt.process_audio(audio_chunks)
-        
+
         stt_latency = (time.time() - stt_start) * 1000
         if transcript:
             logger.info(f"STT result: '{transcript}' ({stt_latency:.0f}ms)")
-            return transcript
         else:
             logger.debug(f"STT returned None after {stt_latency:.0f}ms")
-            return None
-        
+        return transcript, stt_latency
+
     except Exception as e:
         logger.error(f"STT processing error: {e}")
-        return None
+        return None, 0.0
 
 
-async def send_transcript(websocket, transcript: str):
-    """Send transcript to the client"""
+async def send_transcript(
+    websocket,
+    transcript: str,
+    vad_latency: Optional[float] = None,
+    stt_latency: Optional[float] = None,
+    total_latency: Optional[float] = None
+):
+    """Send transcript (with per-stage latencies, for stt_test.html's readouts) to the client"""
     if not transcript or transcript.strip() == '':
         return
-    
+
     try:
         response = {
             "type": "transcript",
             "transcript": transcript.strip(),
+            "vad_latency": vad_latency,
+            "stt_latency": stt_latency,
+            "total_latency": total_latency,
             "timestamp": time.time()
         }
         await websocket.send_text(json.dumps(response))

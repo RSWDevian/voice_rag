@@ -4,6 +4,7 @@ CLAUDE.md
 .env.local
 .env.*.local
 .claudeignore
+opencode.json
 
 # Python
 venv/
