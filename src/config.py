@@ -49,6 +49,11 @@ class Config:
     
     # ASR Settings
     ASR_CHUNK_DURATION: float = float(os.getenv("ASR_CHUNK_DURATION", "0.5"))
+
+    # Safety cap on a single buffered utterance in /stream before forcing a
+    # cutoff, independent of ASR_CHUNK_DURATION (that's the partial-transcript
+    # poll interval for stt.py/stt_v2.py, not an utterance boundary).
+    MAX_UTTERANCE_DURATION: float = float(os.getenv("MAX_UTTERANCE_DURATION", "15.0"))
     
     # Vector Search
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")

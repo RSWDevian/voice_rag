@@ -443,7 +443,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 silence_counter = 0
                 audio_buffer.extend(audio_chunk)
                 buffer_duration += len(audio_chunk) / 2 / config.VAD_SAMPLE_RATE
-                if buffer_duration >= config.ASR_CHUNK_DURATION:
+                # NOTE: do NOT trigger on ASR_CHUNK_DURATION (0.5s) here - that
+                # constant is the partial-transcript poll interval used by
+                # stt.py/stt_v2.py, not an utterance boundary. Triggering the
+                # full STT->LLM->TTS pipeline on it was the utterance-
+                # fragmentation bug: a continuous 3s utterance got sliced into
+                # ~6 independent "turns" every 0.5s, each sent to the LLM as
+                # if it were the whole thing. Only a real pause (silence
+                # branch below) or the generous MAX_UTTERANCE_DURATION safety
+                # cap should end an utterance here.
+                if buffer_duration >= config.MAX_UTTERANCE_DURATION:
                     ready_to_process = True
             elif speech_detected:
                 silence_counter += 1
